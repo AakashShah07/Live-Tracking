@@ -15,6 +15,8 @@ import MapView, {
 } from "react-native-maps";
 import * as Location from "expo-location";
 import haversine from "haversine";
+import Toast from 'react-native-toast-message';
+
 
 // Define initial deltas
 const LATITUDE_DELTA = 0.009;
@@ -25,16 +27,40 @@ const AnimatedMarkers = () => {
   const [routeCoordinates, setRouteCoordinates] = useState([]);
   const [distanceTravelled, setDistanceTravelled] = useState(0);
   const [prevLatLng, setPrevLatLng] = useState({});
-  const coordinate = useRef(new AnimatedRegion({
-    latitude: 0,
-    longitude: 0,
-    latitudeDelta: 0,
-    longitudeDelta: 0
-  })).current;
+  const coordinate = useRef(
+    new AnimatedRegion({
+      latitude: 0,
+      longitude: 0,
+      latitudeDelta: 0,
+      longitudeDelta: 0,
+    })
+  ).current;
 
   const markerRef = useRef(null);
 
-  // Request location permissions and fetch the current location
+  // Function to send location to the server
+  const sendLocationToServer = async (latitude, longitude) => {
+    try {
+      const response = await fetch(
+        "https://live-track-back-production.up.railway.app/api/update-location",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ latitude, longitude }),
+        }
+      );
+
+      if (!response.ok) {
+        throw new Error("Failed to send location");
+      }
+      console.log("Location sent successfully");
+    } catch (error) {
+      console.error("Error sending location:", error);
+    }
+  };
+
   useEffect(() => {
     (async () => {
       let { status } = await Location.requestForegroundPermissionsAsync();
@@ -47,56 +73,40 @@ const AnimatedMarkers = () => {
       const { latitude, longitude } = currentLocation.coords;
       setLocation({ latitude, longitude });
 
-      // Set initial marker position
       coordinate.setValue({ latitude, longitude, latitudeDelta: 0, longitudeDelta: 0 });
 
-      // Start watching location updates
-      Location.watchPositionAsync(
+      // Watch for location updates
+      const locationSubscription = await Location.watchPositionAsync(
         { accuracy: Location.Accuracy.High, timeInterval: 2000, distanceInterval: 10 },
         (position) => {
           const { latitude, longitude } = position.coords;
           const newCoordinate = { latitude, longitude };
 
-          // Animate marker on Android
           if (Platform.OS === "android" && markerRef.current) {
             markerRef.current.animateMarkerToCoordinate(newCoordinate, 500);
           } else {
             coordinate.timing(newCoordinate).start();
           }
 
-          // Update route and distance
           setRouteCoordinates((prev) => [...prev, newCoordinate]);
           setDistanceTravelled((prev) => prev + calcDistance(newCoordinate));
           setPrevLatLng(newCoordinate);
         }
       );
+
+      // Send location to the server every 5 seconds
+      const interval = setInterval(() => {
+        if (location) {
+          sendLocationToServer(location.latitude, location.longitude);
+        }
+      }, 12000);
+
+      return () => {
+        locationSubscription.remove();
+        clearInterval(interval);
+      };
     })();
   }, []);
-
-  useEffect(() => {
-    let counter = 0;
-    const fakeMovement = setInterval(() => {
-      const newLatitude = location.latitude + (counter * 0.0001);
-      const newLongitude = location.longitude + (counter * 0.0001);
-  
-      const newCoordinate = { latitude: newLatitude, longitude: newLongitude };
-      
-      if (Platform.OS === "android" && markerRef.current) {
-        markerRef.current.animateMarkerToCoordinate(newCoordinate, 500);
-      } else {
-        coordinate.timing(newCoordinate).start();
-      }
-  
-      setRouteCoordinates((prev) => [...prev, newCoordinate]);
-      setDistanceTravelled((prev) => prev + calcDistance(newCoordinate));
-      setPrevLatLng(newCoordinate);
-      
-      counter++;
-    }, 5000); // Moves every 5 seconds
-  
-    return () => clearInterval(fakeMovement);
-  }, [location]);
-  
 
   // Calculate distance between previous and new location
   const calcDistance = (newLatLng) => haversine(prevLatLng, newLatLng) || 0;
